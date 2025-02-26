@@ -25,80 +25,63 @@ _start:
 
     lea DI, buf
     mov BX, buf_end
-    read_next_char:
+    loop_read_char:
         ; read char from stdin
         mov AL, 00h
         mov AH, 01h
         int 21h
 
-        ; if got '\n' - end loop
-        cmp AL, 0Dh
-        je end_read_next_char
-
         ; add read char to the buf and move to the next element
         mov [DI], AL
         inc DI
 
+        ; if got '\n' - end loop
+        cmp AL, 0Dh
+        je end_loop_read_char
+
         ; if end of the buf - end loop
         cmp DI, BX
-        jge end_read_next_char
+        jge end_loop_read_char
 
         ; otherwise - continue
-        jmp read_next_char
-    end_read_next_char:
+        jmp loop_read_char
+    end_loop_read_char:
+    ; make string start with space and remove the trailing '\n'
+    mov CX, 1
+    lea SI, buf
+    call rotate_string
+    mov byte ptr [SI], " "
+
     ; shrink the buffer to the size of a string
     mov BX, DI
 
-    ; the main part of the algo is:
-    ; - to find the last word in a string
-    ; - rotate string to the length of that word
-    ; - repeat, with the beginning of a string is shifted the same amount
-
-    ; find last word
-    do_the_job:
-        mov SI, BX
-        find_the_last_space:
-            dec SI
-            cmp byte ptr [SI], " "
-            jne find_the_last_space
-
-        ; len(last word) = addr(end)-1 - addr(last space)
-        mov CX, SI
+    ; the main algo
+    lea SI, buf
+    loop_main:
+        ; find length of the last word = -addr(last space) + addr(end) 
+        call find_last_space
         neg CX 
         add CX, BX
-        add CX, -1
 
-        lea SI, buf
-        shift_string:
-            mov DI, SI
-            mov DL, byte ptr [BX-1]
-            shift_char:
-                mov DH, [DI]
-                mov [DI], DL
+        ; rotate the string to the length of a last word
+        call rotate_string
 
-                ; fast swapping
-                rol DX, 8
-                
-                inc DI
+        ; shift the beginning of the string to the length of that word
+        add SI, CX
 
-                ; if past the end - end loop
-                cmp DI, BX
-                jge end_shift_char;
+        ; until end of the string - repeat
+        cmp SI, BX
+        jnge loop_main
+    end_loop_main:
 
-                ; mov DL, [DI]
-                ; mov [DI], AL
-                jmp shift_char
-            end_shift_char:
-
-            inc SI
-
-            loop shift_string
-            
-            
-            
-    
-
-
+    ; return the trailing '\n' by setting it and rotating string to the len-1
+    lea SI, buf
+    mov byte ptr [SI], 0Dh
+    mov CX, SI
+    neg CX
+    add CX, BX
+    add CX, -1
+    call rotate_string
 
     ; print the output result message
     lea DX, msg_output_string
@@ -129,6 +112,57 @@ println:; (DX: string pointer) -> ()
     int 21h
 
     pop AX
+    ret
+
+
+find_last_space:; (BX: string end pointer, SI: string pointer) -> (CX: last space pointer)
+    push BX
+
+    loop_find_last_space:
+        dec BX
+        cmp BX, SI
+        jl end_loop_find_last_space;
+
+        cmp byte ptr [BX], " "
+        jne loop_find_last_space
+    end_loop_find_last_space:
+
+    mov CX, BX
+
+    pop BX
+    ret
+
+
+rotate_string:; (BX: string end pointer, CX: shift amount, SI: string pointer) -> ()
+    push CX
+    push DX
+    push DI
+
+    loop_shift_string:
+        mov DI, SI
+        mov DL, byte ptr [BX-1]
+        loop_shift_char:
+            mov DH, [DI]
+            mov [DI], DL
+
+            ; fast swapping
+            rol DX, 8
+            
+            inc DI
+
+            ; if past the end - end loop
+            cmp DI, BX
+            jge end_loop_shift_char;
+
+            ; mov DL, [DI]
+            ; mov [DI], AL
+            jmp loop_shift_char
+        end_loop_shift_char:
+        loop loop_shift_string
+
+    pop DI
+    pop DX
+    pop CX
     ret
 
 
