@@ -25,16 +25,25 @@
     msg_res_mul db "x * y = ", "$"
     msg_res_div db "x / y = ", "$"
 
+    err_input_overflow db "(input overflowed, truncated to signed 16 bits)", 0Ah, 0Dh, "$"
+    err_result_overflow db "(result overflowed, truncated to signed 16 bits)", 0Ah, 0Dh, "$"
+    err_division_by_zero db "it is infinity. probably", 0Ah, 0Dh, "$"
 
 .code
 
 newline MACRO
+    push AX
+    push DX
+
     mov AH, 02h
     mov DL, 0Ah
     int 21h
     mov AH, 02h
     mov DL, 0Dh
     int 21h
+
+    pop DX
+    pop AX
 ENDM
 
 readln MACRO buf_suff
@@ -46,7 +55,7 @@ readln MACRO buf_suff
     mov AH, 0Ah
     int 21h
 
-    xor AX, AX
+    xor AH, AH
     mov AL, buf_suff[1]
     mov BX, offset buf_suff + 2
     add BX, AX
@@ -58,9 +67,15 @@ readln MACRO buf_suff
 ENDM
 
 writeln MACRO msg
+    push AX
+    push DX
+
     mov AH, 09h
     mov DX, offset msg
     int 21h
+
+    pop DX
+    pop AX
 ENDM
 
 
@@ -71,24 +86,31 @@ START:
 
     writeln msg_greet
 
+    ; read x
+
     writeln msg_input_x
     readln buf_x_suff
     newline 
-
-    writeln msg_input_y
-    readln buf_y_suff
-    newline
 
     mov BX, offset buf_x
     mov CX, 10
     call str2num
     mov SI, AX
 
+
+    ; read y
+
+    writeln msg_input_y
+    readln buf_y_suff
+    newline
+
     mov BX, offset buf_y
     mov CX, 10
     call str2num
     mov DI, AX
 
+
+    ; common for all ops
 
     mov BX, offset buf_res
     mov CX, 10
@@ -98,40 +120,76 @@ START:
     mov AX, SI
     add AX, DI
 
+    pushf
+
     call num2str
     writeln msg_res_add
     writeln buf_res
     newline
+
+    popf
+
+    jno skip_report_overflow_0
+    writeln err_result_overflow
+    skip_report_overflow_0:
 
     ; sub
 
     mov AX, SI
     sub AX, DI
 
+    pushf
+
     call num2str
     writeln msg_res_sub
     writeln buf_res
     newline
 
+    popf
+
+    jno skip_report_overflow_1
+    writeln err_result_overflow
+    skip_report_overflow_1:
+
     ; mul
 
     mov AX, SI
-    add AX, DI
+    imul DI
+
+    pushf
 
     call num2str
     writeln msg_res_mul
-    ; writeln buf_res
+    writeln buf_res
     newline
+
+    popf
+
+    jo report_overflow_2
+    test DX, DX
+    jz skip_report_overflow_2
+    report_overflow_2:
+    writeln err_result_overflow
+    skip_report_overflow_2:
 
     ; div
 
+    cmp DI, 0
+    je divide_by_zero
+
     mov AX, SI
-    add AX, DI
+    cwd 
+    idiv DI
 
     call num2str
     writeln msg_res_div
-    ; writeln buf_res
+    writeln buf_res
     newline
+
+    jmp divide_by_non_zero
+    divide_by_zero:
+    writeln err_division_by_zero
+    divide_by_non_zero:
 
 
     ; exit
@@ -144,7 +202,7 @@ START:
     str2num PROC ; BX - str ptr, CX - base  ->  AX - result
         push BX
         push CX
-        push DX
+        push DX 
 
         ; move if the first char is a sign
         cmp byte ptr [BX], "-"
@@ -157,20 +215,31 @@ START:
 
         xor AX, AX
         str2num_loop_next_char:
-            imul CX
-            ; TODO check overflow (DX != 0)
+            mul CX
 
-            push CX
-            xor CX, CX
-            mov CL, byte ptr [BX]
-            sub CL, "0"
-            ; TODO check for base overflow !('0' <= CX <= '9')
-            add AX, CX
-            pop CX
+            ; test for overflow
+            test DX, DX
+            jz str2num_skip_detect_overflow_0
+            or AX, 8000h 
+            str2num_skip_detect_overflow_0:
+
+            xor DH, DH
+            mov DL, byte ptr [BX]
+            sub DX, "0"
+            ; NOTE here base might base overflow (DX > CX)
+            add AX, DX
         
             inc BX
             cmp byte ptr [BX], "$"
             jne str2num_loop_next_char
+
+        test AX, 8000h
+        jz str2num_no_err
+
+        str2num_err_overflow:
+            writeln err_input_overflow
+
+        str2num_no_err:
             
         pop DX
         pop CX
@@ -185,7 +254,8 @@ START:
         ret
     str2num ENDP
 
-    num2str PROC ; AX - num, BX - str ptr, CX - base  ->  [BX] - result
+    num2str PROC ; AX - num, BX - str ptr (as long to hold the num), CX - base  ->  [BX] - result
+        NUM_END equ -1
         push AX
         push BX
         push CX
@@ -199,12 +269,11 @@ START:
         inc BX
         num2str_skip_minus:
 
-        push -1
+        push NUM_END
         num2str_loop_next_char:
             xor DX, DX
-            idiv CX
+            div CX
 
-            ; TODO check for base overflow (DH != 0 || DL >= CX)
             push DX
         
             test AX, AX
@@ -213,10 +282,11 @@ START:
         num2str_loop_pop_digits:
             pop DX
 
-            cmp DX, 0
-            jl num2str_end_loop_pop_digits
+            cmp DX, NUM_END
+            je num2str_end_loop_pop_digits
 
-            add DL, "0"
+            ; NOTE here base might base overflow (DX > CX)
+            add DX, "0"
             mov byte ptr [BX], DL
 
             inc BX
