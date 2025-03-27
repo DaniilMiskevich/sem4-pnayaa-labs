@@ -163,6 +163,11 @@ START:
     writeln buf_res
     newline
 
+    test AX, 8000h
+    jz skip_abs_dx
+    not DX
+    skip_abs_dx:
+
     popf
 
     jo report_overflow_2
